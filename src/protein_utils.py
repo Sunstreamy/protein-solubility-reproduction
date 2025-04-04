@@ -180,8 +180,8 @@ if __name__ == "__main__":
     pdb_dir = "/home/sunstreamy/code/project/AI/protein-solubility-reproduction/paperAbout/dataset/pdb"
 
     # 邻接矩阵和归一化邻接矩阵的保存目录
-    adj_dir = "/home/sunstreamy/code/project/AI/protein-solubility-reproduction/adjacency_matrices"
-    norm_adj_dir = "/home/sunstreamy/code/project/AI/protein-solubility-reproduction/normalized_adjacency_matrices"
+    adj_dir = "/home/sunstreamy/code/project/AI/protein-solubility-reproduction/output1/adjacency_matrices"
+    norm_adj_dir = "/home/sunstreamy/code/project/AI/output1/protein-solubility-reproduction/normalized_adjacency_matrices"
 
     # 跳过已存在的文件
     skip_existing = True
