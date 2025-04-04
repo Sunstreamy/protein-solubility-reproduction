@@ -1,10 +1,8 @@
 import numpy as np
 from scipy.spatial.distance import pdist, squareform
-import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
 from Bio.PDB import PDBParser
 import os
-import matplotlib.ticker as ticker
+import glob
 
 
 def validate_matrices(distance_map, adjacency_matrix, normalized_adjacency):
@@ -106,68 +104,9 @@ def normalize_adjacency_matrix(adjacency_matrix):
     return normalized_adjacency
 
 
-def visualize_matrix(
-    matrix, title, output_file=None, colorbar_label="", matrix_type="distance"
+def process_protein_structure(
+    pdb_file, adj_dir, norm_adj_dir, d0=4.0, skip_existing=False
 ):
-    """将矩阵可视化为热图"""
-    plt.figure(figsize=(10, 8))
-
-    if matrix_type == "distance":
-        # 创建掩码，只标记对角线元素（距离为0的元素）
-        mask = np.eye(matrix.shape[0], dtype=bool)
-        # 复制矩阵以避免修改原始数据
-        masked_matrix = matrix.copy()
-        # 只将对角线元素（距离为0）设置为NaN
-        masked_matrix[mask] = np.nan
-
-        # 设置最小值为矩阵中最小的非零距离
-        min_val = np.min(matrix[~mask])  # 排除对角线上的0值
-        max_val = np.max(matrix)
-
-        # 创建对数标准化器
-        norm = LogNorm(vmin=min_val, vmax=max_val)
-
-        # 距离图：使用'viridis'颜色映射和对数尺度
-        im = plt.imshow(
-            masked_matrix, cmap="viridis", interpolation="nearest", norm=norm
-        )
-
-        # 添加colorbar
-        cbar = plt.colorbar(im, label=colorbar_label)
-        # 生成对数均匀分布的刻度值
-        ticks = np.logspace(np.log10(min_val), np.log10(max_val), num=10)
-        cbar.set_ticks(ticks)
-        # 格式化刻度标签，保留一位小数
-        cbar.set_ticklabels([f"{tick:.1f}" for tick in ticks])
-    elif matrix_type == "adjacency":
-        # 邻接矩阵：使用'hot'颜色映射和线性尺度
-        plt.imshow(matrix, cmap="hot", interpolation="nearest", vmin=0, vmax=2)
-        plt.colorbar(label=colorbar_label)
-    else:  # normalized adjacency
-        # 归一化邻接矩阵：使用'coolwarm'颜色映射和对称尺度
-        max_val = np.max(np.abs(matrix))
-        plt.imshow(
-            matrix,
-            cmap="coolwarm",
-            interpolation="nearest",
-            vmin=-max_val,
-            vmax=max_val,
-        )
-        plt.colorbar(label=colorbar_label)
-
-    plt.title(title)
-    plt.xlabel("Residue Index")
-    plt.ylabel("Residue Index")
-    plt.tight_layout()
-
-    if output_file:
-        plt.savefig(output_file, dpi=300, bbox_inches="tight")
-    else:
-        plt.show()
-    plt.close()
-
-
-def process_protein_structure(pdb_file, output_dir="./output", d0=4.0):
     """
     处理蛋白质结构文件，生成GCN的邻接矩阵
 
@@ -175,10 +114,14 @@ def process_protein_structure(pdb_file, output_dir="./output", d0=4.0):
     -----------
     pdb_file : str
         PDB文件路径
-    output_dir : str
-        结果保存目录
+    adj_dir : str
+        邻接矩阵保存目录
+    norm_adj_dir : str
+        归一化邻接矩阵保存目录
     d0 : float
         距离阈值，默认为4.0埃
+    skip_existing : bool
+        是否跳过已存在的文件，默认为False
 
     返回:
     --------
@@ -186,10 +129,25 @@ def process_protein_structure(pdb_file, output_dir="./output", d0=4.0):
         归一化后的邻接矩阵，用于GCN
     """
     # 创建输出目录
-    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(adj_dir, exist_ok=True)
+    os.makedirs(norm_adj_dir, exist_ok=True)
 
     # 提取蛋白质名称
     protein_name = os.path.basename(pdb_file).split(".")[0]
+
+    # 检查文件是否已存在
+    adj_file = f"{adj_dir}/{protein_name}_adjacency.npy"
+    norm_adj_file = f"{norm_adj_dir}/{protein_name}_normalized_adjacency.npy"
+
+    if skip_existing and os.path.exists(adj_file) and os.path.exists(norm_adj_file):
+        print(f"跳过 {protein_name}，文件已存在")
+        # 加载已存在的文件
+        adjacency_matrix = np.load(adj_file)
+        normalized_adjacency = np.load(norm_adj_file)
+        # 重新计算距离图用于验证
+        ca_coords, residue_ids = extract_ca_coordinates_from_pdb(pdb_file)
+        _, distance_map = create_adjacency_matrix(ca_coords, d0)
+        return normalized_adjacency, distance_map, ca_coords, residue_ids
 
     # 1. 提取Cα原子坐标
     ca_coords, residue_ids = extract_ca_coordinates_from_pdb(pdb_file)
@@ -203,42 +161,12 @@ def process_protein_structure(pdb_file, output_dir="./output", d0=4.0):
     normalized_adjacency = normalize_adjacency_matrix(adjacency_matrix)
     print(f"成功归一化邻接矩阵")
 
-    # 4. 可视化并保存结果
-    # 可视化距离图
-    visualize_matrix(
-        distance_map,
-        title=f"Distance Map - Protein {protein_name}",
-        output_file=f"{output_dir}/{protein_name}_distance_map.png",
-        colorbar_label="Distance (Å)",
-        matrix_type="distance",
-    )
+    # 保存结果为NumPy数组 - 分别保存到不同目录
+    np.save(adj_file, adjacency_matrix)
+    np.save(norm_adj_file, normalized_adjacency)
 
-    # 可视化邻接矩阵
-    visualize_matrix(
-        adjacency_matrix,
-        title=f"Adjacency Matrix - Protein {protein_name}",
-        output_file=f"{output_dir}/{protein_name}_adjacency.png",
-        colorbar_label="Connection Strength",
-        matrix_type="adjacency",
-    )
-
-    # 可视化归一化邻接矩阵
-    visualize_matrix(
-        normalized_adjacency,
-        title=f"Normalized Adjacency Matrix - Protein {protein_name}",
-        output_file=f"{output_dir}/{protein_name}_normalized_adjacency.png",
-        colorbar_label="Normalized Connection Strength",
-        matrix_type="normalized",
-    )
-
-    # 保存结果为NumPy数组
-    np.save(f"{output_dir}/{protein_name}_distance_map.npy", distance_map)
-    np.save(f"{output_dir}/{protein_name}_adjacency.npy", adjacency_matrix)
-    np.save(
-        f"{output_dir}/{protein_name}_normalized_adjacency.npy", normalized_adjacency
-    )
-
-    print(f"已保存所有结果到 {output_dir} 目录")
+    print(f"已保存邻接矩阵到 {adj_file}")
+    print(f"已保存归一化邻接矩阵到 {norm_adj_file}")
 
     # 验证矩阵
     validate_matrices(distance_map, adjacency_matrix, normalized_adjacency)
@@ -246,17 +174,38 @@ def process_protein_structure(pdb_file, output_dir="./output", d0=4.0):
     return normalized_adjacency, distance_map, ca_coords, residue_ids
 
 
-# 使用示例
+# 处理目录中的所有PDB文件
 if __name__ == "__main__":
-    # PDB文件路径
+    # PDB文件目录
     pdb_dir = "/home/sunstreamy/code/project/AI/protein-solubility-reproduction/paperAbout/dataset/pdb"
-    pdb_file = os.path.join(pdb_dir, "4503895.pdb")  # 使用其中一个PDB文件
 
-    # 处理蛋白质结构
-    normalized_adjacency, distance_map, ca_coords, residue_ids = (
-        process_protein_structure(pdb_file)
-    )
+    # 邻接矩阵和归一化邻接矩阵的保存目录
+    adj_dir = "/home/sunstreamy/code/project/AI/protein-solubility-reproduction/adjacency_matrices"
+    norm_adj_dir = "/home/sunstreamy/code/project/AI/protein-solubility-reproduction/normalized_adjacency_matrices"
 
-    print(f"处理完成: {os.path.basename(pdb_file)}")
-    print(f"蛋白质包含 {len(ca_coords)} 个残基")
-    print(f"邻接矩阵形状: {normalized_adjacency.shape}")
+    # 跳过已存在的文件
+    skip_existing = True
+
+    # 获取目录中所有PDB文件
+    pdb_files = glob.glob(os.path.join(pdb_dir, "*.pdb"))
+
+    print(f"找到 {len(pdb_files)} 个PDB文件")
+
+    # 处理每个PDB文件
+    for i, pdb_file in enumerate(pdb_files):
+        protein_name = os.path.basename(pdb_file).split(".")[0]
+        print(f"\n处理第 {i+1}/{len(pdb_files)} 个蛋白质: {protein_name}")
+
+        try:
+            # 处理蛋白质结构
+            normalized_adjacency, distance_map, ca_coords, residue_ids = (
+                process_protein_structure(
+                    pdb_file, adj_dir, norm_adj_dir, skip_existing=skip_existing
+                )
+            )
+
+            print(f"处理完成: {os.path.basename(pdb_file)}")
+            print(f"蛋白质包含 {len(ca_coords)} 个残基")
+            print(f"邻接矩阵形状: {normalized_adjacency.shape}")
+        except Exception as e:
+            print(f"处理 {protein_name} 时出错: {e}")
