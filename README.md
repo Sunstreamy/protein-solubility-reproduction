@@ -4,224 +4,110 @@
 
 ## 待实现的三个关键任务
 
-1. **蛋白质三维结构的 GCN 邻接矩阵表示**：使用预测的蛋白质三维结构，通过二维距离图来表示 GCN 邻接矩阵
-2. **使用 ProtTrans 进行序列特征提取**：通过 ProtTrans 模型对蛋白质序列进行特征提取
+1. **蛋白质三维结构的 gcn 邻接矩阵表示**：使用预测的蛋白质三维结构，通过二维距离图来表示 gcn 邻接矩阵
+2. **使用 prottrans 进行序列特征提取**：通过 prottrans 模型对蛋白质序列进行特征提取
 3. **LSTM 溶解度预测模型**：训练一个蛋白质溶解度预测模型 LSTM 来提取溶解度相关特征
 
-## 相关仓库
+### 关于第一个复现任务 - 构建邻接矩阵
 
-- [GraphSol](https://github.com/jcchan23/GraphSol)：使用 GCN 和接触图预测蛋白质溶解度
-- [DeepMutSol](https://github.com/biomed-AI/DeepMutSol)：预测突变对蛋白质溶解度的影响
-- [AlphaFold2](https://github.com/google-deepmind/alphafold)：用于预测蛋白质 3D 结构
+根据论文 2.2.3 节 "Adjacency matrix" 和 2.2.4 节 "Node selection"，以及图1的整体流程，论文的完整步骤是：
 
-## 论文中提到但原仓库缺失的数据集
+1. 首先使用 AlphaFold 预测蛋白质的三维结构
+2. 从预测的三维结构中提取 Cα 原子坐标
+3. 计算所有 Cα 原子之间的距离，生成完整的距离图
+4. **然后**根据公式 (1) 将距离转换为邻接矩阵:
+   ```
+   sij = 2/(1 + max(d0,dij)/d0)
+   ```
+   其中 d0 设为 4.0 Å
 
-论文中提到但在 DeepMutSol 仓库中可能不完整或缺失的关键数据集：
+5. **之后**使用 ProtTrans 提取野生型和突变型序列的特征
+6. 计算两者特征的差异，选择差异最大的 30 个残基作为节点
+7. 只保留这 30 个残基构成的子邻接矩阵，作为 GCN 的输入
 
-1. **完整的 eSOL 数据集** - 论文提到使用了约 4132 个大肠杆菌蛋白质的溶解度数据，但 DeepMutSol 仓库中可能只包含部分经过处理的数据。完整数据集可从[eSOL 数据库](https://www.tanpaku.org/tp-esol/)获取。
+所以，答案是：**先构建完整的邻接矩阵，然后再使用 ProtTrans 选择 30 个残基**。
 
-2. **S. cerevisiae 数据集** - 用于独立测试的酵母菌蛋白质溶解度数据。DeepMutSol 仓库中可能未完整提供，需要参考 GraphSol 论文或从[相关研究资源](https://www.jstage.jst.go.jp/article/biochemistry/108/5/108_12/)获取。
+### 论文研究的完整步骤
 
-3. **部分蛋白质的 PDB 结构文件** - 论文使用了 AlphaFold2 预测的蛋白质结构，但仓库中可能只包含部分蛋白质的结构文件。缺失的结构可从[AlphaFold Protein Structure Database](https://alphafold.ebi.ac.uk/)下载或使用[ColabFold](https://github.com/sokrypton/ColabFold)预测。
+1. **数据准备**：
+   - 使用来自 Pon-Sol2 研究的数据集
+   - 包含 6328 个突变，分为溶解度降低、不变和增加三类
+   - 训练集 5666 个突变，测试集 662 个突变
 
-## 数据集与任务对应关系
+2. **特征提取**：
+   - 使用 AlphaFold 预测蛋白质三维结构
+   - 使用 ProtTrans 提取蛋白质序列特征
+   - 预训练蛋白质溶解度预测模型，提取注意力池化特征
 
-### 任务 1: 蛋白质三维结构的 GCN 邻接矩阵表示
+3. **距离图和邻接矩阵构建**：
+   - 从三维结构中提取 Cα 原子坐标
+   - 计算所有残基之间的距离图
+   - 使用公式 sij = 2/(1 + max(d0,dij)/d0) 将距离转换为邻接矩阵
 
-**所需数据集**:
+4. **节点选择**：
+   - 计算野生型和突变型序列的 ProtTrans 特征差异
+   - 选择差异最大的 30 个残基作为 GCN 的节点
+   - 这些残基平均与突变位点的距离更近 (13.87 Å vs 27.79 Å)
 
-- **PDB 文件** (位于 DeepMutSol 仓库的`/pdb`目录)：含有蛋白质的原子坐标信息
-- **缺失数据**：部分蛋白质的 PDB 文件在 DeepMutSol 仓库中可能不完整，可从[AlphaFold Protein Structure Database](https://alphafold.ebi.ac.uk/)下载补充，或使用[ColabFold](https://github.com/sokrypton/ColabFold)在线预测
+5. **图卷积网络**：
+   - 以 30 个选中的残基作为节点
+   - 以节点间的邻接关系作为边
+   - 采用 2 层 GCN，中间层 64 维，最后层 16 维
 
-**数据处理流程**:
+6. **特征融合**：
+   - GCN 输出的特征与预训练的注意力池化特征拼接
+   - 通过自注意力池化获取全局嵌入
+   - 通过全连接层进行最终预测
 
-- 从 PDB 文件中提取 Cα 原子坐标
-- 计算残基之间的欧氏距离构建距离图
-- 基于距离阈值生成二进制邻接矩阵
-- 归一化邻接矩阵用于 GCN
+7. **训练策略**：
+   - 10 折交叉验证
+   - 使用 Adam 优化器和均方误差损失函数
+   - 采用数据增强策略（反向突变）
 
-### 任务 2: 使用 ProtTrans 进行序列特征提取
+8. **临床应用验证**：
+   - 在 ClinVar 数据库的临床相关基因上应用该方法
+   - 预测的溶解度变化能够区分致病性突变
 
-**所需数据集**:
+因此，第一个复现任务（构建邻接矩阵）应该是：使用 AlphaFold 预测的蛋白质结构，提取所有 Cα 原子坐标，计算距离图，然后转换为邻接矩阵。选择 30 个敏感残基是后续步骤，不是第一个任务的一部分。
 
-- **蛋白质序列数据** (位于 DeepMutSol 仓库的 Excel 文件，如`all_protein_sequences.xlsx`)
-- **缺失数据**：ProtTrans 预训练模型需从[Hugging Face](https://huggingface.co/Rostlab)下载，主要包括:
-  - [Rostlab/prot_bert](https://huggingface.co/Rostlab/prot_bert)
-  - [Rostlab/prot_t5_xl_uniref50](https://huggingface.co/Rostlab/prot_t5_xl_uniref50)
-  - [Rostlab/prot_electra_discriminator](https://huggingface.co/Rostlab/prot_electra_discriminator)
+### 1. 计算野生型和突变型序列的特征差异是为了什么？
 
-**数据处理流程**:
+计算野生型和突变型序列的特征差异是为了**识别对突变最敏感的残基**。这样做的目的有：
 
-- 加载蛋白质序列
-- 使用 ProtTrans 模型提取序列的潜在表示
-- 应用不同的池化策略将 token 级特征转换为序列级特征
+- **减少计算复杂度**：从全部残基（可能有几百个）减少到只有30个，大大降低了GCN的计算量
+- **提高信息效率**：只关注那些对突变响应最大的残基，减少冗余信息
+- **增强模型性能**：特征差异大的残基通常是对蛋白质功能和结构影响最大的残基
+- **改善生物学意义**：这些敏感残基往往与突变位点在空间上更接近，与突变的物理影响更相关
 
-### 任务 3: LSTM 溶解度预测模型
+论文通过计算发现，选出的30个残基与突变位点的平均距离（13.87 Å）比其他残基（27.79 Å）显著小，证明了这种选择策略的合理性。
 
-**所需数据集**:
+### 2. 从三维结构中提取 Cα 原子坐标，是对一个蛋白质的所有残基提取吗？
 
-- **溶解度标签数据** (位于 DeepMutSol 仓库的 Excel 文件，如`train_dataset.xlsx`、`test_dataset.xlsx`)
-The datasets are freely available in VariBench database [52,53] at http://structure.bmc.lu.se/VariBench/ponsol2.php (accessed on 26 July 2021).
-- DeepMutSol 仓库中可能只包含部分数据
+是的，**首先对蛋白质的所有残基提取Cα原子坐标**。步骤如下：
 
-**数据处理流程**:
-
-- 整合任务 1 和任务 2 生成的特征
-- 划分训练集和测试集
-- 训练 LSTM 模型预测蛋白质溶解度
-- 在独立测试集上评估模型性能
-
-## 数据获取方式
-
-1. **论文原始仓库中的数据**
-   - 从[DeepMutSol](https://github.com/biomed-AI/DeepMutSol)仓库的`dataset`目录下载：
-     - PDB 文件：位于`/pdb`目录
-     - 序列和溶解度数据：位于多个 xlsx 文件中
-2. **补充数据来源**
-
-   - 蛋白质结构：[AlphaFold Protein Structure Database](https://alphafold.ebi.ac.uk/)或使用[ColabFold](https://github.com/sokrypton/ColabFold)在线预测
-   - ProtTrans 预训练模型：[Hugging Face Rostlab 模型仓库](https://huggingface.co/Rostlab)
-
-3. **GraphSol 仓库中的参考数据**
-   - 从[GraphSol](https://github.com/jcchan23/GraphSol)仓库下载节点特征和边特征：
-     - 节点特征：`./Data/node_features.zip`
-     - 边特征：`./Data/edge_features.zip`
-     - FASTA 文件：`./Data/fasta.zip`
-
-## 项目结构
+- 使用AlphaFold预测整个蛋白质的三维结构
+- 从这个完整结构中提取所有氨基酸残基的Cα原子坐标
+- 基于这些完整坐标计算距离图和邻接矩阵
+- 在得到完整的距离图和邻接矩阵后，才进行30个敏感残基的选择
 
 ```
-.
-├── README.md
-├── requirements.txt
-└── src/
-    ├── protein_utils.py   # 处理蛋白质结构，生成邻接矩阵
-    ├── prot_trans.py      # ProtTrans特征提取
-    └── solubility_model.py # 溶解度预测模型
-```
+### 3. 选择差异最大的 30 个残基作为 GCN 的节点，意思是每一个GCN都只处理一个蛋白质结构吗？
 
-## 参考文献
+是的，**每次GCN处理一个突变对（野生型-突变型）**，步骤是：
 
-- Wang, J., Chen, S., Yuan, Q., Chen, J., Li, D., Wang, L., & Yang, Y. (2024). Predicting the effects of mutations on protein solubility using graph convolution network and protein language model representation. Journal of Computational Chemistry, 45(8), 436-445. https://doi.org/10.1002/jcc.27249
+- 对于每一个突变预测，模型会：
+  - 处理一个野生型蛋白质结构
+  - 对应一个特定的突变（如A23G，第23位氨基酸从A变为G）
+  - 计算这个特定突变前后的序列特征差异
+  - 为这个特定突变选择30个最敏感的残基
+  - 构建这30个残基之间的图结构
+  - 使用GCN处理这个图结构，预测这个特定突变对溶解度的影响
 
-- Chen, J., Zheng, S., Zhao, H., & Yang, Y. (2021). Structure-aware protein solubility prediction from sequence through graph convolutional network and predicted contact map. Journal of Cheminformatics, 13(1), 7. https://doi.org/10.1186/s13321-021-00488-1
+- 对于另一个突变预测，可能会选择不同的30个残基作为节点
 
-论文中提出的三个关键技术
+每个突变预测任务都是独立的，使用相同的GCN模型架构，但处理的节点（敏感残基）可能不同。模型不是一次性处理所有可能的突变，而是每次处理一个特定的突变对溶解度的影响。
 
-1. 蛋白质三维结构的图卷积网络表示
-   想象蛋白质像一条折叠的绳子，上面有许多珠子(氨基酸)。传统方法只看这串珠子的排列顺序，但忽略了空间上的关系。
-   本文的创新是：
-   将蛋白质看作一个"图"，其中每个"节点"是一个氨基酸
-   用 AlphaFold2(一种先进的 AI 工具)预测蛋白质的三维结构
-   根据氨基酸之间的距离建立"邻接矩阵"，记录哪些氨基酸在空间上靠近
-   这就像建立了一张蛋白质内部的"关系网络图"，帮助计算机理解蛋白质的空间结构。
-
-2. 使用 ProtTrans 进行序列特征提取
-   传统方法中，每个氨基酸只用简单的数字表示。而这篇论文使用了更先进的"蛋白质语言模型"(ProtTrans)：
-   这类似于 ChatGPT 这样的语言模型，但专门学习了蛋白质序列的"语言"
-   它能够理解氨基酸序列中的复杂模式和上下文关系
-   每个氨基酸不再是简单的标签，而是一个包含丰富信息的"向量"
-   这就像给每个氨基酸配上了一个详细的"身份证"，包含了它与其他氨基酸的各种关系信息。
-
-3. LSTM 溶解度预测模型
-   有了前两部分提取的特征，论文使用 LSTM(一种擅长处理序列数据的神经网络)来进行最终预测：
-   结合了空间结构信息和序列特征
-   使用 eSOL 数据集(包含约 4132 个大肠杆菌蛋白质)进行训练
-   使用酵母菌(S. cerevisiae)数据集进行独立测试
-   这就像一个专家在综合考虑了蛋白质的"外形"和"成分"后，给出溶解度变化的预测。
-   论文的创新点和意义
-
-初始数据集：使用来自 Pon-Sol2 研究的数据集，包含 77 种蛋白质的 6328 个突变，这些突变已经被标记为三类（溶解度降低、增加或无效）。
-
-数据分割：将这些数据随机分为训练集（5666 个突变）和测试集（662 个突变），同时保持三类突变的比例相似，并确保测试集中的突变位置与训练集不重叠。
-
-【预训练阶段 - LSTM 在这里发挥作用】
-
-- 在 DeepSol 数据集(~69,000 个蛋白质序列)上预训练一个蛋白质溶解度预测模型
-- 这个预训练模型使用 LSTM 网络处理 ProtTrans 提取的序列特征
-- LSTM 的作用是捕捉序列中的长距离依赖关系
-- 预训练模型输出的注意力池化特征将用于后续主模型
-
-三维结构提取：
-使用 AlphaFold2 预测这些蛋白质的三维结构（针对野生型蛋白质）
-基于预测的三维结构生成邻接矩阵，表示氨基酸之间的空间关系
-这些结构信息用于构建蛋白质的图表示（Graph representation）
-
-序列特征提取：
-使用 ProtTrans 预训练模型从蛋白质序列中提取特征
-对于每个长度为 L 的蛋白质序列，生成 L×1024 维的特征
-将野生型和突变型蛋白质的特征拼接，得到 L×2048 维的节点特征
-
-GCN 模型：
-将提取的序列特征作为节点特征
-使用基于三维结构生成的邻接矩阵表示节点间的边关系
-通过图卷积网络聚合蛋白质的空间结构和序列信息
-
-【特征融合 - 使用 LSTM 预训练模型的输出】
-
-- 从预训练的 LSTM 模型中提取 L×8 维的注意力池化特征
-- 将这些特征与 GCN 输出的 L×16 维特征拼接
-
-预测：
-将 GCN 的输出特征与来自蛋白质溶解度预测模型的特征拼接
-通过自注意力池化和全连接层生成最终的溶解度变化预测值
-
-DeepMutSol完整训练流程
-阶段一：数据准备和特征提取
-数据集收集
-Pon-Sol2数据集：包含77种蛋白质的6328个突变
-DeepSol数据集：包含~69,000个蛋白质序列(用于预训练)
-三维结构预测
-使用AlphaFold2预测野生型蛋白质的三维结构
-只需预测原始蛋白质结构，不需要预测每个突变后的结构
-序列特征提取
-使用ProtTrans预训练模型从蛋白质序列中提取特征
-对野生型和突变型蛋白质序列都进行特征提取
-拼接这些特征形成节点特征
-
-
-阶段二：预训练溶解度预测模型
-LSTM模型构建
-使用LSTM网络和自注意力池化模块构建模型
-输入为ProtTrans提取的特征
-LSTM模型预训练
-在DeepSol数据集上训练模型预测蛋白质溶解度
-目标是区分可溶性和不可溶性蛋白质
-从预训练模型中提取注意力池化特征
-
-
-阶段三：突变溶解度变化预测模型训练
-构建GCN模型
-使用预测的三维结构生成邻接矩阵
-将ProtTrans特征作为节点特征
-通过GCN聚合结构和序列信息
-特征融合
-将GCN输出特征与预训练LSTM模型的注意力池化特征拼接
-通过自注意力池化生成全局嵌入
-最终预测
-使用全连接层生成最终的溶解度变化预测
-在Pon-Sol2数据集上训练和评估模型
-
-
-我们需要实现的三个关键部分
-蛋白质三维结构的GCN邻接矩阵表示 (对应阶段一的步骤2和阶段三的步骤1)
-需要的数据：蛋白质PDB文件(来自AlphaFold2预测或DeepMutSol仓库)
-实现内容：读取PDB文件，提取Cα原子坐标，计算距离，生成邻接矩阵
-代码位置：protein_utils.py
-使用ProtTrans进行序列特征提取 (对应阶段一的步骤3)
-需要的数据：蛋白质序列数据(从DeepMutSol仓库的xlsx文件中获取)
-实现内容：加载ProtTrans模型，输入序列，提取特征，应用池化策略
-代码位置：prot_trans.py
-LSTM溶解度预测模型 (对应阶段二和阶段三)
-需要的数据：
-预训练阶段：DeepSol数据集(~69,000个蛋白质序列)
-主模型训练：Pon-Sol2数据集(train_dataset.xlsx, test_dataset.xlsx)
-前两个步骤生成的特征
-实现内容：构建LSTM网络，融合GCN和序列特征，预测溶解度变化
-代码位置：solubility_model.py
-数据需求总结
-PDB文件：蛋白质三维结构数据(DeepMutSol仓库/AlphaFold2)
-序列数据：蛋白质序列(DeepMutSol仓库的xlsx文件)
-溶解度标签：蛋白质溶解度和突变效应数据(DeepMutSol仓库的xlsx文件)
-预训练数据：DeepSol数据集(用于LSTM预训练)
-ProtTrans模型：从Hugging Face下载预训练模型
+所以，简单说：
+- 每次GCN处理一个蛋白质的一个特定突变
+- 选择的30个敏感残基是针对这个特定突变的
+- 不同的突变可能会选择不同的30个敏感残基
